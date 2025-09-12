@@ -1,320 +1,275 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Tourist Safety System</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Tourist Safety System</title>
+  <script src="https://cdn.tailwindcss.com"></script>
 
-        // Set Firebase log level to debug for better console output
-        setLogLevel('debug');
+  <!-- Firebase (modular) -->
+  <script type="module">
+    import { initializeApp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    try { setLogLevel('debug'); } catch (e) { }
 
-        let app, db, auth;
-        let userId = null;
-        let userDocRef = null;
-        let map, marker;
+    const firebaseConfig = (typeof __firebase_config !== 'undefined' && __firebase_config) ? __firebase_config : {};
+    const appId = (typeof __app_id !== 'undefined' && __app_id) ? __app_id : 'default-app-id';
 
-        // --- Data Models and Configuration ---
-        const geoFences = {
-            safe_zone_1: { name: "Historic City Center", coords: { lat: 34.0522, lon: -118.2437 }, radius: 500 },
-            unsafe_zone_1: { name: "Restricted Area", coords: { lat: 34.0570, lon: -118.2500 }, radius: 200, threatLevel: "High" },
-            safe_zone_2: { name: "Park", coords: { lat: 34.0450, lon: -118.2500 }, radius: 350 },
-            unsafe_zone_2: { name: "Crowded Market", coords: { lat: 34.0500, lon: -118.2450 }, radius: 100, threatLevel: "Medium" }
-        };
+    let app, db, auth;
+    let userId = null;
+    let userDocRef = null;
+    let map, marker;
 
-        const initialUserLocation = { lat: 34.0522, lon: -118.2437 }; // Starting in a safe zone
+    const geoFences = {
+      safe_zone_1: { name: "Historic City Center", coords: { lat: 34.0522, lon: -118.2437 }, radius: 500 },
+      unsafe_zone_1: { name: "Restricted Area", coords: { lat: 34.0570, lon: -118.2500 }, radius: 200, threatLevel: "High" },
+      safe_zone_2: { name: "Park", coords: { lat: 34.0450, lon: -118.2500 }, radius: 350 },
+      unsafe_zone_2: { name: "Crowded Market", coords: { lat: 34.0500, lon: -118.2450 }, radius: 100, threatLevel: "Medium" }
+    };
 
-        // --- Google Maps Initialization ---
-        // The callback function for the Google Maps API
-        window.initMap = function() {
-            const mapOptions = {
-                center: initialUserLocation,
-                zoom: 16,
-                mapTypeId: 'satellite',
-                disableDefaultUI: true // Remove default UI for a cleaner look
-            };
-            map = new google.maps.Map(document.getElementById("map"), mapOptions);
-            marker = new google.maps.Marker({
-                position: initialUserLocation,
-                map: map,
-                title: "Tourist Location"
-            });
-        };
+    const initialUserLocation = { lat: 34.0522, lon: -118.2437 };
 
-        // Function to update the map's center and marker position
-        function updateMapLocation(coords) {
-            if (map && marker) {
-                const newLocation = { lat: coords.lat, lng: coords.lon };
-                map.setCenter(newLocation);
-                marker.setPosition(newLocation);
-            }
-        }
+    window.initMap = function () {
+      const center = { lat: initialUserLocation.lat, lng: initialUserLocation.lon };
+      const mapOptions = {
+        center,
+        zoom: 16,
+        mapTypeId: 'satellite',
+        disableDefaultUI: true
+      };
+      map = new google.maps.Map(document.getElementById('map'), mapOptions);
+      marker = new google.maps.Marker({ position: center, map, title: 'Tourist Location' });
 
-        // --- Firebase Initialization and Authentication ---
-        async function initializeFirebase() {
-            try {
-                if (Object.keys(firebaseConfig).length === 0) {
-                    console.error("Firebase config is empty. The app will not function correctly.");
-                    return;
-                }
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-
-                const __initial_auth_token = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
-                if (__initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                    console.log("Successfully signed in with custom token.");
-                } else {
-                    await signInAnonymously(auth);
-                    console.log("Successfully signed in anonymously.");
-                }
-                userId = auth.currentUser.uid;
-                userDocRef = doc(db, `artifacts/${appId}/users/${userId}/tourists`, `tourist_id_${userId}`);
-
-                document.getElementById('userIdDisplay').innerText = `User ID: ${userId}`;
-                
-                // Initialize user document in Firestore if it doesn't exist
-                const initialData = {
-                    id: `tourist_id_${userId}`,
-                    name: 'John Doe',
-                    location: initialUserLocation,
-                    status: 'Safe',
-                    riskScore: 0,
-                    incidents: [],
-                    lastUpdated: new Date()
-                };
-                await setDoc(userDocRef, initialData, { merge: true });
-
-                setupRealtimeMonitoring();
-            } catch (e) {
-                console.error("Error during Firebase initialization or sign-in:", e);
-            }
-        }
-
-        // --- Core Application Logic ---
-
-        // Function to check if a user is within a geo-fenced zone
-        function isWithinFence(userCoords, fenceCoords, radius) {
-            const R = 6371e3; // metres
-            const φ1 = userCoords.lat * Math.PI / 180;
-            const φ2 = fenceCoords.lat * Math.PI / 180;
-            const Δφ = (fenceCoords.lat - userCoords.lat) * Math.PI / 180;
-            const Δλ = (fenceCoords.lon - userCoords.lon) * Math.PI / 180;
-            const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-                      Math.cos(φ1) * Math.cos(φ2) *
-                      Math.sin(Δλ/2) * Math.sin(Δλ/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            const distance = R * c;
-            return distance <= radius;
-        }
-
-        // AI-simulated monitoring function
-        function runAIMonitoring(userDoc) {
-            const location = userDoc.location;
-            let currentStatus = 'Safe';
-            let riskScore = 0;
-            let incidentDescription = '';
-
-            for (const key in geoFences) {
-                const fence = geoFences[key];
-                if (isWithinFence(location, fence.coords, fence.radius)) {
-                    if (fence.threatLevel) {
-                        currentStatus = 'Warning';
-                        riskScore = fence.threatLevel === 'High' ? 10 : 5;
-                        incidentDescription = `Entered a high-risk area: ${fence.name}. Threat Level: ${fence.threatLevel}`;
-                        break;
-                    }
-                }
-            }
-
-            // Update UI with AI analysis results
-            const statusElement = document.getElementById('aiStatus');
-            const scoreElement = document.getElementById('riskScore');
-            const incidentLog = document.getElementById('incidentLog');
-            
-            statusElement.className = `text-2xl font-bold ${currentStatus === 'Safe' ? 'text-green-500' : 'text-red-500'}`;
-            statusElement.innerText = currentStatus;
-            scoreElement.innerText = riskScore;
-            
-            if (incidentDescription) {
-                const logEntry = document.createElement('div');
-                logEntry.className = 'text-sm text-red-400 mt-2';
-                logEntry.innerText = `[${new Date().toLocaleTimeString()}] ALERT: ${incidentDescription}`;
-                incidentLog.prepend(logEntry);
-            }
-        }
-
-        // Real-time monitoring with onSnapshot
-        function setupRealtimeMonitoring() {
-            if (!userDocRef) return;
-
-            onSnapshot(userDocRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    console.log("Realtime data received:", data);
-                    
-                    // Update UI based on new data
-                    document.getElementById('currentLocation').innerText = `(${data.location.lat.toFixed(4)}, ${data.location.lon.toFixed(4)})`;
-                    document.getElementById('geoFenceStatus').innerText = data.status;
-
-                    // Update the map with the new location
-                    updateMapLocation(data.location);
-
-                    // Run the AI analysis
-                    runAIMonitoring(data);
-                } else {
-                    console.log("No user data found in Firestore.");
-                }
-            });
-        }
-        
-        // Update user location in Firestore
-        async function updateLocation(coords) {
-            if (!userDocRef) {
-                console.error("Firebase not initialized.");
-                return;
-            }
-            try {
-                await setDoc(userDocRef, {
-                    location: coords,
-                    lastUpdated: new Date()
-                }, { merge: true });
-                console.log("Location updated successfully.");
-            } catch (e) {
-                console.error("Error updating location:", e);
-            }
-        }
-        
-        // User movement simulation
-        document.addEventListener('DOMContentLoaded', () => {
-            initializeFirebase();
-
-            document.getElementById('moveSafeBtn').addEventListener('click', () => {
-                const safeCoords = geoFences.safe_zone_1.coords;
-                updateLocation(safeCoords);
-            });
-
-            document.getElementById('moveUnsafeBtn').addEventListener('click', () => {
-                const unsafeCoords = geoFences.unsafe_zone_1.coords;
-                updateLocation(unsafeCoords);
-            });
-
-            document.getElementById('sosBtn').addEventListener('click', () => {
-                const messageBox = document.getElementById('messageBox');
-                messageBox.classList.remove('hidden');
-                messageBox.innerHTML = `
-                    <div class="bg-red-700 text-white p-4 rounded-lg flex items-center justify-between shadow-md">
-                        <span>SOS signal sent! Emergency services alerted.</span>
-                        <button onclick="document.getElementById('messageBox').classList.add('hidden')" class="ml-4 text-white hover:text-gray-200 focus:outline-none">&times;</button>
-                    </div>
-                `;
-            });
+      Object.values(geoFences).forEach((f) => {
+        new google.maps.Circle({
+          strokeColor: f.threatLevel ? '#ff5252' : '#60a5fa',
+          strokeOpacity: 0.6,
+          strokeWeight: 2,
+          fillColor: f.threatLevel ? '#ff5252' : '#60a5fa',
+          fillOpacity: 0.08,
+          map,
+          center: { lat: f.coords.lat, lng: f.coords.lon },
+          radius: f.radius
         });
-    </script>
-    <script async src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY_HERE&callback=initMap"></script>
-    <style>
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #0f172a;
-            color: #e2e8f0;
+      });
+    };
+
+    function updateMapLocation(coords) {
+      if (map && marker) {
+        const newLocation = { lat: coords.lat, lng: coords.lon };
+        map.setCenter(newLocation);
+        marker.setPosition(newLocation);
+      }
+    }
+
+    async function initializeFirebase() {
+      try {
+        if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
+          console.warn('No Firebase config provided. Firebase features will be disabled.');
+          document.getElementById('userIdDisplay').innerText = 'Firebase not configured.';
+          return;
         }
-        .container {
-            max-width: 800px;
+
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+
+        const __initial_auth_token = (typeof window.__initial_auth_token !== 'undefined') ? window.__initial_auth_token : null;
+        if (__initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+          console.log('Signed in with custom token');
+        } else {
+          await signInAnonymously(auth);
+          console.log('Signed in anonymously');
         }
-        .card {
-            background-color: #1e293b;
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+
+        userId = auth.currentUser.uid;
+        userDocRef = doc(db, 'tourists', `tourist_${userId}`);
+
+        document.getElementById('userIdDisplay').innerText = `User ID: ${userId}`;
+
+        const initialData = {
+          id: `tourist_${userId}`,
+          name: 'John Doe',
+          location: initialUserLocation,
+          status: 'Safe',
+          riskScore: 0,
+          incidents: [],
+          lastUpdated: new Date()
+        };
+
+        await setDoc(userDocRef, initialData, { merge: true });
+        setupRealtimeMonitoring();
+      } catch (e) {
+        console.error('Firebase init error:', e);
+      }
+    }
+
+    function isWithinFence(userCoords, fenceCoords, radius) {
+      const R = 6371e3;
+      const φ1 = userCoords.lat * Math.PI / 180;
+      const φ2 = fenceCoords.lat * Math.PI / 180;
+      const Δφ = (fenceCoords.lat - userCoords.lat) * Math.PI / 180;
+      const Δλ = (fenceCoords.lon - userCoords.lon) * Math.PI / 180;
+      const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      const distance = R * c;
+      return distance <= radius;
+    }
+
+    function runAIMonitoring(userDoc) {
+      const location = userDoc.location || initialUserLocation;
+      let currentStatus = 'Safe';
+      let riskScore = 0;
+      let incidentDescription = '';
+
+      for (const key in geoFences) {
+        const fence = geoFences[key];
+        if (isWithinFence(location, fence.coords, fence.radius)) {
+          if (fence.threatLevel) {
+            currentStatus = 'Warning';
+            riskScore = fence.threatLevel === 'High' ? 10 : 5;
+            incidentDescription = `Entered a risky area: ${fence.name} (Threat: ${fence.threatLevel})`;
+            break;
+          } else {
+            currentStatus = 'Safe';
+            riskScore = 0;
+          }
         }
-        .gradient-border {
-            border: 2px solid;
-            border-image: linear-gradient(45deg, #a855f7, #6366f1) 1;
-            padding: 1px;
+      }
+
+      const statusElement = document.getElementById('aiStatus');
+      const scoreElement = document.getElementById('riskScore');
+      const incidentLog = document.getElementById('incidentLog');
+
+      statusElement.className = `text-2xl font-bold ${currentStatus === 'Safe' ? 'text-green-400' : 'text-yellow-400'}`;
+      statusElement.innerText = currentStatus;
+      scoreElement.innerText = riskScore;
+
+      if (incidentDescription) {
+        const logEntry = document.createElement('div');
+        logEntry.className = 'text-sm text-yellow-200 mt-2';
+        logEntry.innerText = `[${new Date().toLocaleTimeString()}] ALERT: ${incidentDescription}`;
+        const placeholder = incidentLog.querySelector('.placeholder');
+        if (placeholder) placeholder.remove();
+        incidentLog.prepend(logEntry);
+      }
+    }
+
+    function setupRealtimeMonitoring() {
+      if (!userDocRef) return;
+      onSnapshot(userDocRef, (docSnap) => {
+        if (docSnap.exists && docSnap.exists()) {
+          const data = docSnap.data();
+          console.log('Realtime data:', data);
+          if (data.location) {
+            document.getElementById('currentLocation').innerText = `(${data.location.lat.toFixed(4)}, ${data.location.lon.toFixed(4)})`;
+            document.getElementById('geoFenceStatus').innerText = data.status || 'Unknown';
+            updateMapLocation(data.location);
+            runAIMonitoring(data);
+          }
+        } else {
+          console.log('No data found for user.');
         }
-    </style>
+      });
+    }
+
+    async function updateLocation(coords) {
+      if (!userDocRef) { console.warn('No user doc ref'); return; }
+      try {
+        await setDoc(userDocRef, { location: coords, lastUpdated: new Date() }, { merge: true });
+        console.log('Location updated');
+      } catch (e) {
+        console.error('Error updating location:', e);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      initializeFirebase();
+
+      document.getElementById('moveSafeBtn').addEventListener('click', () => {
+        updateLocation(geoFences.safe_zone_1.coords);
+      });
+
+      document.getElementById('moveUnsafeBtn').addEventListener('click', () => {
+        updateLocation(geoFences.unsafe_zone_1.coords);
+      });
+
+      document.getElementById('sosBtn').addEventListener('click', () => {
+        const messageBox = document.getElementById('messageBox');
+        messageBox.classList.remove('hidden');
+        messageBox.innerHTML = `\n          <div class=\"bg-red-700 text-white p-4 rounded-lg flex items-center justify-between shadow-md\">\n            <span>SOS signal sent! Emergency services alerted.</span>\n            <button id=\"closeMsg\" class=\"ml-4 text-white hover:text-gray-200 focus:outline-none\">&times;</button>\n          </div>`;
+        document.getElementById('closeMsg').addEventListener('click', () => messageBox.classList.add('hidden'));
+      });
+    });
+  </script>
+
+  <!-- Google Maps with provided API key -->
+  <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCx9-J1fXZX0nYaFwOrPd6_2RYZ47YE_YU&callback=initMap"></script>
+
+  <style>
+    body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; background-color: #0f172a; color: #e2e8f0; }
+    .container { max-width: 900px; }
+    .card { background-color: #0b1220; border-radius: 12px; padding: 20px; box-shadow: 0 6px 18px rgba(2,6,23,0.6); }
+    .gradient-border { border: 2px solid; border-image: linear-gradient(45deg,#a855f7,#6366f1) 1; padding: 1px; }
+  </style>
 </head>
 <body class="p-8">
+  <div class="container mx-auto p-4 space-y-8">
+    <header class="text-center mb-8">
+      <h1 class="text-3xl font-extrabold text-white">Smart Tourist Safety System</h1>
+      <p class="text-gray-400 mt-2">AI + Geo-Fencing + Digital ID (Simulation)</p>
+    </header>
 
-    <div class="container mx-auto p-4 space-y-8">
-        <header class="text-center mb-10">
-            <h1 class="text-4xl font-extrabold text-white">Smart Tourist Safety System</h1>
-            <p class="text-gray-400 mt-2">AI + Geo-Fencing + Blockchain Digital ID (Simulation)</p>
-        </header>
+    <div class="space-y-6">
+      <div class="card">
+        <h2 class="text-xl font-bold text-gray-200 mb-3">Digital Identity</h2>
+        <div class="text-gray-400 text-sm mb-2">Your unique digital ID (simulated). Used for emergency response and audit trails.</div>
+        <div id="userIdDisplay" class="bg-gray-800 p-3 rounded-lg font-mono text-xs break-all">Loading User ID...</div>
+      </div>
 
-        <div class="space-y-6">
-
-            <!-- Blockchain Digital ID Section -->
-            <div class="card">
-                <h2 class="text-2xl font-bold text-gray-200 mb-4">Digital Identity</h2>
-                <div class="text-gray-400 text-sm mb-2">
-                    Your unique digital ID, stored on a secure, simulated blockchain. This ID provides a tamper-proof record for emergency services.
-                </div>
-                <div id="userIdDisplay" class="bg-gray-700 p-3 rounded-lg font-mono text-xs break-all">
-                    Loading User ID...
-                </div>
-            </div>
-
-            <!-- Geo-Fencing Section -->
-            <div class="card">
-                <h2 class="text-2xl font-bold text-gray-200 mb-4">Geo-Fencing & Location</h2>
-                <div id="map" class="w-full h-80 rounded-lg shadow-md mb-4"></div>
-                <div class="flex items-center space-x-4 mb-4">
-                    <button id="moveSafeBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-full transition-colors duration-200">
-                        Move to Safe Zone
-                    </button>
-                    <button id="moveUnsafeBtn" class="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 px-4 rounded-full transition-colors duration-200">
-                        Move to Unsafe Zone
-                    </button>
-                    <button id="sosBtn" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-full transition-colors duration-200">
-                        SOS
-                    </button>
-                </div>
-                <div class="flex flex-col space-y-2 text-sm">
-                    <div class="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
-                        <span class="text-gray-400">Current Location:</span>
-                        <span id="currentLocation" class="text-white font-semibold">(Loading...)</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
-                        <span class="text-gray-400">Geo-Fence Status:</span>
-                        <span id="geoFenceStatus" class="text-white font-semibold">Loading...</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- AI Monitoring & Incident Response Section -->
-            <div class="card">
-                <h2 class="text-2xl font-bold text-gray-200 mb-4">AI Monitoring</h2>
-                <div class="flex items-center justify-between mb-4">
-                    <div>
-                        <div class="text-gray-400 text-sm">AI-Predicted Status:</div>
-                        <div id="aiStatus" class="text-2xl font-bold text-gray-300">Loading...</div>
-                    </div>
-                    <div class="text-right">
-                        <div class="text-gray-400 text-sm">Risk Score:</div>
-                        <div id="riskScore" class="text-2xl font-bold text-gray-300">0</div>
-                    </div>
-                </div>
-                <div id="incidentLog" class="mt-4 p-4 bg-gray-800 rounded-lg max-h-48 overflow-y-auto">
-                    <h3 class="text-lg font-semibold text-gray-300 mb-2">Incident Log</h3>
-                    <div class="text-gray-500 text-sm">No incidents to report.</div>
-                </div>
-            </div>
-
-            <!-- Custom Message Box -->
-            <div id="messageBox" class="fixed top-4 left-1/2 transform -translate-x-1/2 w-96 z-50 transition-opacity duration-300 hidden"></div>
-
+      <div class="card">
+        <h2 class="text-xl font-bold text-gray-200 mb-3">Geo-Fencing & Location</h2>
+        <div id="map" class="w-full h-80 rounded-lg shadow-md mb-4"></div>
+        <div class="flex items-center space-x-4 mb-4">
+          <button id="moveSafeBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-full">Move to Safe Zone</button>
+          <button id="moveUnsafeBtn" class="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 px-4 rounded-full">Move to Unsafe Zone</button>
+          <button id="sosBtn" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-full">SOS</button>
         </div>
-    </div>
+        <div class="flex flex-col space-y-2 text-sm">
+          <div class="flex justify-between items-center bg-gray-800 p-3 rounded-lg">
+            <span class="text-gray-400">Current Location:</span>
+            <span id="currentLocation" class="text-white font-semibold">(Loading...)</span>
+          </div>
+          <div class="flex justify-between items-center bg-gray-800 p-3 rounded-lg">
+            <span class="text-gray-400">Geo-Fence Status:</span>
+            <span id="geoFenceStatus" class="text-white font-semibold">Loading...</span>
+          </div>
+        </div>
+      </div>
 
+      <div class="card">
+        <h2 class="text-xl font-bold text-gray-200 mb-3">AI Monitoring</h2>
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <div class="text-gray-400 text-sm">AI-Predicted Status:</div>
+            <div id="aiStatus" class="text-2xl font-bold text-gray-300">Loading...</div>
+          </div>
+          <div class="text-right">
+            <div class="text-gray-400 text-sm">Risk Score:</div>
+            <div id="riskScore" class="text-2xl font-bold text-gray-300">0</div>
+          </div>
+        </div>
+        <div id="incidentLog" class="mt-4 p-4 bg-gray-900 rounded-lg max-h-48 overflow-y-auto">
+          <h3 class="text-lg font-semibold text-gray-300 mb-2">Incident Log</h3>
+          <div class="text-gray-500 text-sm placeholder">No incidents to report.</div>
+        </div>
+      </div>
+
+      <div id="messageBox" class="fixed top-4 left-1/2 transform -translate-x-1/2 w-96 z-50 transition-opacity duration-300 hidden"></div>
+    </div>
+  </div>
 </body>
 </html>
