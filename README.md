@@ -100,5 +100,15 @@ cd ResQTech
 
 
 
+🏆 Acknowledgments
 
-## 🏗️ System Architecture  
+Ministry of Development of North Eastern Region (Problem Statement SIH25002).
+
+Smart India Hackathon platform.
+
+Open-source communities of Flutter, TensorFlow, Hyperledger, and GeoServer.
+
+---
+
+Do you also want me to add a **banner section with badges** (e.g., build status, license, tech stack icons) at the top so it looks more professional on GitHub?
+
